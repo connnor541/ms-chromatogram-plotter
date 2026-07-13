@@ -27,7 +27,14 @@ azim = st.sidebar.slider("Azimuth", -180, 180, -83)
 # 2. Execution Logic
 if uploaded_file:
     df = vl.load_proteomics_data(uploaded_file)
-    df_clean, intensity_col = vl.clean_data(df, filter_quant=filter_quant)
+    df_clean, intensity_col, invalid_stats = vl.clean_data(df, filter_quant=filter_quant)
+    if invalid_stats["TOTAL"] > 0:
+        st.warning(
+            f"**{invalid_stats['TOTAL']} invalid rows removed:** "
+            f"({invalid_stats['RT']} RT, {invalid_stats['Intensity']} Intensity, "
+            f"{invalid_stats['Accession']} Accession)")
+    else: 
+        st.success("Data clean! No invalid rows detected.")
     
     fractions = sorted(df_clean['Fraction'].dropna().unique())
     x_min = df_clean['Retention_time'].min() - 1.0
