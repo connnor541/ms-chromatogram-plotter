@@ -23,11 +23,11 @@ def clean_data(df, filter_quant=True):
         df = df.rename(columns={'#': 'Index'})
 
     # 1. Retention time 
-    rt_col = next((c for c in df.columns if 'Retention time' in c), None) #find next column with 'Retention time' in its name
+    rt_col = next((c for c in df.columns if 'Retention time' in c or 'RT' in c), None) #find next column with 'Retention time' in its name
     if rt_col is None:
         st.error("CRITICAL ERROR: No 'Retention time' column found!")
         raise ValueError("No retention time column found!")
-    df['Retention_time'] = pd.to_numeric(df[rt_col], errors='coerce')
+    df['Retention_time'] = pd.to_numeric(df[rt_col], errors='coerce')    
 
     # 2. Fraction 
     frac_col = next((c for c in df.columns if 'Fraction' in c), None)
@@ -59,6 +59,8 @@ def clean_data(df, filter_quant=True):
         intensity_col = numeric_cols[0]
 
     df_clean['Intensity'] = pd.to_numeric(df_clean[intensity_col], errors='coerce')
+    invalid_rt_count = df_clean['Retention_time'].isna().sum()
+    invalid_intensity_count = df_clean['Intensity'].isna().sum()    
 
     # Accession & Cleaning 
     accession_col = next((c for c in df_clean.columns if 'Accession' in c), None)
@@ -66,10 +68,21 @@ def clean_data(df, filter_quant=True):
         st.error("CRITICAL ERROR: No 'Accession' column found!")
         raise ValueError("No 'Accession' column found.")
     
-    df_clean['Accession'] = df_clean[accession_col].astype(str).str.strip()
-    df_clean = df_clean[~((df_clean['Accession'] == '') | (df_clean['Accession'].str.upper() == 'NAN'))]
     
+    df_clean['Accession'] = df_clean[accession_col].astype(str).str.strip()    
+    is_invalid = df_clean['Accession'].isna() | \
+             df_clean['Accession'].isin(['', 'nan', 'NaN', 'None', 'NULL'])
+
+    invalid_accession_count = is_invalid.sum()
+    df_clean = df_clean[~is_invalid].copy()    
     df_clean = df_clean.dropna(subset=['Retention_time', 'Intensity'])
+
+    invalid_stats = {
+        "RT": invalid_rt_count,
+        "Intensity": invalid_intensity_count,
+        "Accession": invalid_accession_count,
+        "TOTAL": invalid_rt_count + invalid_intensity_count + invalid_accession_count
+    }
 
     # 6. Collapse
     rows_before = len(df_clean)
@@ -77,7 +90,7 @@ def clean_data(df, filter_quant=True):
     
     st.write(f"Collapse complete: {rows_before} rows -> {len(df_clean)} rows.")
     
-    return df_clean, intensity_col
+    return df_clean, intensity_col, invalid_stats
 
 
 def build_exact_trace(df, fraction, combine_mode):
