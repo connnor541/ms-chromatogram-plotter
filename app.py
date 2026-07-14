@@ -64,10 +64,11 @@ if uploaded_file:
 
     # Combined Plots
     st.header("Combined Visualizations")
-    col1, col2 = st.columns(2)
-    
+    col1, col2, col3 = st.columns(3)     
     fig_stacked = vl.plot_stacked_fractions(all_exact, all_binned, show_filter, x_min, x_max, bar_width)
     fig_3d = vl.plot_waterfall_3d(all_binned, smooth_mode, elev=elev, azim=azim)
+    peptide_sets = vl.compute_peptide_fraction_sets(df_clean)
+    fig_overlap = vl.plot_peptide_overlap(peptide_sets)
     
     with col1:
         st.subheader("Stacked Fractions")
@@ -75,6 +76,10 @@ if uploaded_file:
     with col2:
         st.subheader("3D Waterfall")
         st.pyplot(fig_3d)
+    with col3:
+        st.subheader("Peptide Overlap (UpSet)")
+        if fig_overlap is not None:
+            st.pyplot(fig_overlap)
     
     # 3. Download Center
     st.divider()
@@ -85,6 +90,8 @@ if uploaded_file:
         "STACKED": fig_stacked,
         "WATERFALL": fig_3d
     }
+    if fig_overlap is not None:
+        download_figs["PEPTIDE_OVERLAP"] = fig_overlap
     for f in fractions:
         download_figs[f"FRACTION_{f}"] = fraction_figs[f]
 
