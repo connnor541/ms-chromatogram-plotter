@@ -1,4 +1,8 @@
+import matplotlib 
+matplotlib.use('Agg')  
+import matplotlib.pyplot as plt
 import streamlit as st
+
 import visualization_logic as vl
 import pandas as pd
 import io
@@ -42,6 +46,7 @@ if uploaded_file:
 
     all_exact = {}
     all_binned = {}
+    fraction_figs = {}
 
     for fraction in fractions:
         exact = vl.build_exact_trace(df_clean, fraction, combine_mode)
@@ -54,6 +59,7 @@ if uploaded_file:
         n_peptides = df_clean[df_clean['Fraction'] == fraction]['Accession'].nunique()
         fig = vl.plot_chromatogram_with_ma(exact, binned_proc, fraction, n_peptides, 
                                            bar_width, smooth_mode, show_filter, x_min, x_max)
+        fraction_figs[fraction] = fig
         st.pyplot(fig)
 
     # Combined Plots
@@ -80,10 +86,7 @@ if uploaded_file:
         "WATERFALL": fig_3d
     }
     for f in fractions:
-        n_pep = df_clean[df_clean['Fraction'] == f]['Accession'].nunique()
-        download_figs[f"FRACTION_{f}"] = vl.plot_chromatogram_with_ma(
-            all_exact[f], all_binned[f], f, n_pep, bar_width, smooth_mode, show_filter, x_min, x_max
-        )
+        download_figs[f"FRACTION_{f}"] = fraction_figs[f]
 
     # 2. Display Individual Download Buttons in a Grid
     cols = st.columns(4)
@@ -104,6 +107,9 @@ if uploaded_file:
             img_buf = io.BytesIO()
             fig.savefig(img_buf, format="png", bbox_inches='tight')
             zf.writestr(f"{name.lower()}.png", img_buf.getvalue())
+    
+    for fig in download_figs.values():
+        plt.close(fig)
 
     st.download_button(
         label="📦 Download ALL Plots (ZIP)",
