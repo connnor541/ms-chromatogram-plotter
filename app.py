@@ -31,7 +31,7 @@ azim = st.sidebar.slider("Azimuth", -180, 180, -83)
 # 2. Execution Logic
 if uploaded_file:
     df = vl.load_proteomics_data(uploaded_file)
-    df_clean, intensity_col, invalid_stats = vl.clean_data(df, filter_quant=filter_quant)
+    df_clean, intensity_col, invalid_stats = vl.clean_data(df, filter_quant=filter_quant, combine_mode=combine_mode)
     if invalid_stats["TOTAL"] > 0:
         st.warning(
             f"**{invalid_stats['TOTAL']} invalid rows removed:** "
@@ -43,6 +43,7 @@ if uploaded_file:
     fractions = sorted(df_clean['Fraction'].dropna().unique())
     x_min = df_clean['Retention_time'].min() - 1.0
     x_max = df_clean['Retention_time'].max() + 1.0
+    fraction_stats = vl.compute_fraction_peptide_stats(df_clean)
 
     all_exact = {}
     all_binned = {}
@@ -55,9 +56,8 @@ if uploaded_file:
         
         all_exact[fraction] = exact
         all_binned[fraction] = binned_proc
-        
-        n_peptides = df_clean[df_clean['Fraction'] == fraction]['Accession'].nunique()
-        fig = vl.plot_chromatogram_with_ma(exact, binned_proc, fraction, n_peptides, 
+        stats = fraction_stats[fraction]
+        fig = vl.plot_chromatogram_with_ma(exact, binned_proc, fraction, stats['n_peptides'], stats['n_unique'], stats['cumulative_intensity'],
                                            bar_width, smooth_mode, show_filter, x_min, x_max)
         fraction_figs[fraction] = fig
         st.pyplot(fig)

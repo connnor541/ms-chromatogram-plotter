@@ -16,7 +16,7 @@ def load_proteomics_data(file_input):
         st.error(f"Error loading file: {e}")
         raise
 
-def clean_data(df, filter_quant=True):
+def clean_data(df, filter_quant=True, combine_mode='max'):
     df.columns = df.columns.str.strip() 
 
     if '#' in df.columns:
@@ -77,6 +77,13 @@ def clean_data(df, filter_quant=True):
     df_clean = df_clean[~is_invalid].copy()    
     df_clean = df_clean.dropna(subset=['Retention_time', 'Intensity'])
 
+
+    seq_col = next((c for c in df_clean.columns if 'Sequence' in c), None)
+    if seq_col is None: 
+        st.error("CRITICAL ERROR: No 'Sequence' column found!")
+        raise ValueError("No 'Sequence' column found.")
+    df_clean['Sequence'] = df_clean[seq_col].astype(str).str.strip()
+
     invalid_stats = {
         "RT": invalid_rt_count,
         "Intensity": invalid_intensity_count,
@@ -86,12 +93,38 @@ def clean_data(df, filter_quant=True):
 
     # 6. Collapse
     rows_before = len(df_clean)
-    df_clean = df_clean.groupby(['Fraction', 'Retention_time', 'Accession'], as_index=False)['Intensity'].sum()
+    df_clean = df_clean.groupby(['Fraction', 'Retention_time', 'Accession', 'Sequence'], as_index=False)['Intensity'].sum()
+    rows_after_accession_collapse = len(df_clean)
     
-    st.write(f"Collapse complete: {rows_before} rows -> {len(df_clean)} rows.")
+    st.write(f"**[COLLAPSE 1/2 - by Accession]** {rows_before} rows -> {rows_after_accession_collapse} rows "
+             f"(merged charge-state duplicates of the same peptide/accession).")
+    
+    df_clean = df_clean.groupby(['Fraction', 'Retention_time', 'Sequence'], as_index=False)['Intensity'].agg(combine_mode)
+    st.write(
+        f"**[COLLAPSE 2/2 - by Sequence, mode={combine_mode.upper()}]** "
+        f"{rows_after_accession_collapse} rows -> {len(df_clean)} rows "
+        f"(merged peptides shared across multiple protein accessions)."
+    )
     
     return df_clean, intensity_col, invalid_stats
 
+def compute_fraction_peptide_stats(df_clean):
+    seq_fraction_counts = df_clean.groupby('Sequence')['Fraction'].nunique()
+    exclusive_sequences = set(seq_fraction_counts[seq_fraction_counts == 1].index)
+
+    stats = {}
+    for fraction, group in df_clean.groupby('Fraction'):
+        sequences = set(group['Sequence'])
+        n_peptides = len(sequences)
+        n_unique = len(sequences & exclusive_sequences)
+        pct_unique = (n_unique / n_peptides * 100) if n_peptides > 0 else 0.0
+        stats[fraction] = {
+            'n_peptides': n_peptides,
+            'n_unique': n_unique,
+            'pct_unique': pct_unique,
+            'cumulative_intensity': group['Intensity'].sum(),
+        }
+    return stats 
 
 def build_exact_trace(df, fraction, combine_mode):
     # Filter by fraction if applicable
@@ -205,7 +238,7 @@ def apply_smoothing_pipeline(binned_df, mode, window_minutes, bin_width_min):
     
     return out
 
-def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, bar_width,
+def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_unique, cumulative_intensity, bar_width,
                                smooth_mode, show_filter, x_min, x_max,
                                overlay_mode='twin_axis'):
     if len(exact_df) == 0:
@@ -214,7 +247,12 @@ def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, bar_wid
 
     fig, ax = plt.subplots(figsize=(10, 5)) # Reduced slightly for better web viewing
     label_text = f"Profile (filter = {smooth_mode})"
-    pep_label = f'Peptide identifications (n={n_peptides})'
+    pct_unique = (n_unique / n_peptides * 100) if n_peptides > 0 else 0.0
+    pep_label = (f"Peptide identifications: {n_peptides} \n"
+                 f"Unique peptides: {n_unique} ({pct_unique:.0f}%)\n"
+                 f"Cumulative intensity: {cumulative_intensity:.2e}"
+            )
+    
 
     if overlay_mode == 'pct_of_max':
         bar_vals = exact_df['Intensity'] / exact_df['Intensity'].max() * 100
