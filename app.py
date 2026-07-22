@@ -58,7 +58,7 @@ if uploaded_file:
         all_binned[fraction] = binned_proc
         stats = fraction_stats[fraction]
         fig = vl.plot_chromatogram_with_ma(exact, binned_proc, fraction, stats['n_peptides'], stats['n_unique'], stats['cumulative_intensity'],
-                                           bar_width, smooth_mode, show_filter, x_min, x_max)
+                                           bar_width, smooth_mode, show_filter, x_min, x_max, unique_intensity=stats['unique_intensity'])
         fraction_figs[fraction] = fig
         st.pyplot(fig)
 

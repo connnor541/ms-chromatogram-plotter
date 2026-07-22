@@ -118,11 +118,19 @@ def compute_fraction_peptide_stats(df_clean):
         n_peptides = len(sequences)
         n_unique = len(sequences & exclusive_sequences)
         pct_unique = (n_unique / n_peptides * 100) if n_peptides > 0 else 0.0
+
+        cumulative_intensity = group['Intensity'].sum()
+        unique_mask = group['Sequence'].isin(exclusive_sequences)
+        unique_intensity = group.loc[unique_mask, 'Intensity'].sum()
+        pct_unique_intensity = (unique_intensity / cumulative_intensity * 100) if cumulative_intensity > 0 else 0.0
+
         stats[fraction] = {
             'n_peptides': n_peptides,
             'n_unique': n_unique,
             'pct_unique': pct_unique,
-            'cumulative_intensity': group['Intensity'].sum(),
+            'cumulative_intensity': cumulative_intensity,
+            'unique_intensity': unique_intensity,
+            'pct_unique_intensity': pct_unique_intensity,
         }
     return stats 
 
@@ -334,7 +342,7 @@ def apply_smoothing_pipeline(binned_df, mode, window_minutes, bin_width_min):
 
 def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_unique, cumulative_intensity, bar_width,
                                smooth_mode, show_filter, x_min, x_max,
-                               overlay_mode='twin_axis'):
+                               overlay_mode='twin_axis', unique_intensity=None):
     if len(exact_df) == 0:
         st.warning("No data to plot")
         return None
@@ -346,6 +354,9 @@ def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_uniqu
                  f"Unique peptides: {n_unique} ({pct_unique:.0f}%)\n"
                  f"Cumulative intensity: {cumulative_intensity:.2e}"
             )
+    if unique_intensity is not None:
+        pct_unique_intensity = (unique_intensity / cumulative_intensity * 100) if cumulative_intensity > 0 else 0.0
+        pep_label += f"\nUnique peptide intensity: {unique_intensity:.2e} ({pct_unique_intensity:.0f}%)"
     
 
     if overlay_mode == 'pct_of_max':
