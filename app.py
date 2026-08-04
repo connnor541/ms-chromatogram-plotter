@@ -44,6 +44,7 @@ if uploaded_file:
     x_min = df_clean['Retention_time'].min() - 1.0
     x_max = df_clean['Retention_time'].max() + 1.0
     fraction_stats = vl.compute_fraction_peptide_stats(df_clean)
+    df_props = vl.compute_aa_properties(df_clean)
 
     all_exact = {}
     all_binned = {}
@@ -80,7 +81,27 @@ if uploaded_file:
         st.subheader("Peptide Overlap (UpSet)")
         if fig_overlap is not None:
             st.pyplot(fig_overlap)
-    
+
+    # Biophysical Property Boxplots (pI & GRAVY across fractions)
+    st.header("Peptide Biophysical Properties")
+    col4, col5 = st.columns(2)
+
+    fig_pi = vl.plot_property_boxplot(
+        df_props, 'pI', ylabel='Isoelectric Point (pI)',
+        title='Theoretical pI Distribution by Fraction', color='#6baed6'
+    )
+    fig_gravy = vl.plot_property_boxplot(
+        df_props, 'GRAVY', ylabel='GRAVY Index',
+        title='GRAVY Hydrophobicity Distribution by Fraction', color='#fd8d3c'
+    )
+
+    with col4:
+        if fig_pi is not None:
+            st.pyplot(fig_pi)
+    with col5:
+        if fig_gravy is not None:
+            st.pyplot(fig_gravy)
+
     # 3. Download Center
     st.divider()
     st.subheader("Download Center")
@@ -92,6 +113,10 @@ if uploaded_file:
     }
     if fig_overlap is not None:
         download_figs["PEPTIDE_OVERLAP"] = fig_overlap
+    if fig_pi is not None:
+        download_figs["PI_BOXPLOT"] = fig_pi
+    if fig_gravy is not None:
+        download_figs["GRAVY_BOXPLOT"] = fig_gravy
     for f in fractions:
         download_figs[f"FRACTION_{f}"] = fraction_figs[f]
 

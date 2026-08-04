@@ -6,6 +6,8 @@ from scipy.signal import savgol_filter
 from mpl_toolkits.mplot3d import proj3d
 import streamlit as st
 
+from aa_properties import compute_peptide_properties
+
 def load_proteomics_data(file_input):
     try:
         df = pd.read_csv(file_input, sep=',', encoding='utf-8')
@@ -133,6 +135,40 @@ def compute_fraction_peptide_stats(df_clean):
             'pct_unique_intensity': pct_unique_intensity,
         }
     return stats 
+
+def compute_aa_properties(df_clean):
+    """
+    Computes theoretical pI, GRAVY, and molecular weight for every unique
+    peptide Sequence in df_clean, then merges the values back onto the full
+    dataframe (so each row keeps its Fraction/Retention_time/Intensity plus
+    the new 'pI', 'GRAVY', 'MW' columns).
+
+    Properties are computed once per unique sequence (not once per row) since
+    they only depend on the amino acid sequence itself.
+    """
+    unique_seqs = df_clean['Sequence'].dropna().unique()
+
+    records = []
+    n_failed = 0
+    for seq in unique_seqs:
+        try:
+            mw, pi, gravy = compute_peptide_properties(seq)
+        except Exception:
+            mw, pi, gravy = np.nan, np.nan, np.nan
+            n_failed += 1
+        records.append({'Sequence': seq, 'MW': mw, 'pI': pi, 'GRAVY': gravy})
+
+    props_df = pd.DataFrame(records)
+    df_props = df_clean.merge(props_df, on='Sequence', how='left')
+
+    if n_failed > 0:
+        st.warning(
+            f"Could not compute biophysical properties for {n_failed} sequence(s) "
+            f"(likely non-standard amino acid codes)."
+        )
+
+    return df_props
+
 
 def compute_peptide_fraction_sets(df_clean):
     """Map each fraction to the set of peptide Sequences identified in it."""
@@ -548,6 +584,50 @@ def plot_waterfall_3d(all_binned, smooth_mode, elev=23, azim=-83):
     place_zaxis_multiplier_text(ax, rf'$\times 10^{{{exponent}}}$', fontsize=10, pad_points=48)   
 
     return fig
+
+def plot_property_boxplot(df_props, property_col, ylabel, title, color='#6baed6'):
+    """
+    Boxplot of a per-peptide biophysical property (e.g. 'pI' or 'GRAVY')
+    grouped by Fraction - one box per fraction. Each peptide Sequence is
+    counted once per fraction (deduplicated), since its property value is
+    identical regardless of how many retention-time rows it appears in.
+    """
+    if property_col not in df_props.columns:
+        st.warning(f"Column '{property_col}' not found - cannot plot.")
+        return None
+
+    fractions = sorted(df_props['Fraction'].dropna().unique())
+    if len(fractions) == 0:
+        st.warning(f"No data available for {property_col} boxplot.")
+        return None
+
+    dedup = df_props.drop_duplicates(subset=['Fraction', 'Sequence'])
+    data = [dedup.loc[dedup['Fraction'] == f, property_col].dropna().values for f in fractions]
+
+    fig, ax = plt.subplots(figsize=(max(6, len(fractions) * 1.0), 5), constrained_layout=True)
+    # matplotlib renamed the 'labels' kwarg to 'tick_labels' in 3.9+ and later
+    # dropped 'labels' entirely, so set the ticks manually instead of relying
+    # on either kwarg - this works across all matplotlib versions.
+    bp = ax.boxplot(data, patch_artist=True)
+    ax.set_xticks(range(1, len(fractions) + 1))
+    ax.set_xticklabels([str(f) for f in fractions])
+
+    for patch in bp['boxes']:
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+    for median in bp['medians']:
+        median.set_color('black')
+
+    ax.set_title(title, fontsize=13, fontweight='bold')
+    ax.set_xlabel('Fraction', fontsize=11)
+    ax.set_ylabel(ylabel, fontsize=11)
+    ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+
+    if property_col == 'GRAVY':
+        ax.axhline(0, color='gray', linestyle=':', linewidth=1)
+
+    return fig
+
 
 def plot_stacked_fractions(all_exact, all_binned, show_filter, x_min, x_max, bar_width):
     n_fractions = len(all_exact)
