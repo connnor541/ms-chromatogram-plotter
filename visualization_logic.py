@@ -629,6 +629,48 @@ def plot_property_boxplot(df_props, property_col, ylabel, title, color='#6baed6'
     return fig
 
 
+def plot_intensity_boxplot(df_clean, ylabel='Intensity (a.u.)', title='Peptide Intensity Distribution by Fraction',
+                            color='#74c476', log_scale=True):
+    """
+    Boxplot of peptide Intensity values grouped by Fraction - one box per
+    fraction, combined into a single figure with Fraction on the x-axis.
+    Uses df_clean directly (each row is already one peptide/RT/fraction
+    observation after the collapse steps in clean_data), so no further
+    deduplication is needed.
+    """
+    if 'Intensity' not in df_clean.columns:
+        st.warning("Column 'Intensity' not found - cannot plot.")
+        return None
+
+    fractions = sorted(df_clean['Fraction'].dropna().unique())
+    if len(fractions) == 0:
+        st.warning("No data available for the intensity boxplot.")
+        return None
+
+    data = [df_clean.loc[df_clean['Fraction'] == f, 'Intensity'].dropna().values for f in fractions]
+
+    fig, ax = plt.subplots(figsize=(max(6, len(fractions) * 1.0), 5), constrained_layout=True)
+    bp = ax.boxplot(data, patch_artist=True)
+    ax.set_xticks(range(1, len(fractions) + 1))
+    ax.set_xticklabels([str(f) for f in fractions])
+
+    for patch in bp['boxes']:
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+    for median in bp['medians']:
+        median.set_color('black')
+
+    if log_scale:
+        ax.set_yscale('log')
+
+    ax.set_title(title, fontsize=13, fontweight='bold')
+    ax.set_xlabel('Fraction', fontsize=11)
+    ax.set_ylabel(ylabel, fontsize=11)
+    ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+
+    return fig
+
+
 def plot_stacked_fractions(all_exact, all_binned, show_filter, x_min, x_max, bar_width):
     n_fractions = len(all_exact)
     if n_fractions == 0:

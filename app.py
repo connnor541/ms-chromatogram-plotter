@@ -102,6 +102,13 @@ if uploaded_file:
         if fig_gravy is not None:
             st.pyplot(fig_gravy)
 
+    # Peptide Intensity Boxplot (combined, Fraction on x-axis)
+    st.header("Peptide Intensity by Fraction")
+    log_scale_intensity = st.checkbox("Log scale (Intensity)", value=True)
+    fig_intensity = vl.plot_intensity_boxplot(df_clean, log_scale=log_scale_intensity)
+    if fig_intensity is not None:
+        st.pyplot(fig_intensity)
+
     # 3. Download Center
     st.divider()
     st.subheader("Download Center")
@@ -117,6 +124,8 @@ if uploaded_file:
         download_figs["PI_BOXPLOT"] = fig_pi
     if fig_gravy is not None:
         download_figs["GRAVY_BOXPLOT"] = fig_gravy
+    if fig_intensity is not None:
+        download_figs["INTENSITY_BOXPLOT"] = fig_intensity
     for f in fractions:
         download_figs[f"FRACTION_{f}"] = fraction_figs[f]
 
