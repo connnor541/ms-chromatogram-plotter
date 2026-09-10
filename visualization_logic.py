@@ -160,6 +160,7 @@ def compute_aa_properties(df_clean):
 
     props_df = pd.DataFrame(records)
     df_props = df_clean.merge(props_df, on='Sequence', how='left')
+    df_props['Length'] = df_props['Sequence'].str.len()
 
     if n_failed > 0:
         st.warning(

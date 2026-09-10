@@ -82,9 +82,9 @@ if uploaded_file:
         if fig_overlap is not None:
             st.pyplot(fig_overlap)
 
-    # Biophysical Property Boxplots (pI & GRAVY across fractions)
+    # Biophysical Property Boxplots (pI, GRAVY & Length across fractions)
     st.header("Peptide Biophysical Properties")
-    col4, col5 = st.columns(2)
+    col4, col5, col6 = st.columns(3)
 
     fig_pi = vl.plot_property_boxplot(
         df_props, 'pI', ylabel='Isoelectric Point (pI)',
@@ -94,6 +94,10 @@ if uploaded_file:
         df_props, 'GRAVY', ylabel='GRAVY Index',
         title='GRAVY Hydrophobicity Distribution by Fraction', color='#fd8d3c'
     )
+    fig_length = vl.plot_property_boxplot(
+        df_props, 'Length', ylabel='Peptide Length (aa)',
+        title='Peptide Length Distribution by Fraction', color='#9e9ac8'
+    )
 
     with col4:
         if fig_pi is not None:
@@ -101,6 +105,9 @@ if uploaded_file:
     with col5:
         if fig_gravy is not None:
             st.pyplot(fig_gravy)
+    with col6:
+        if fig_length is not None:
+            st.pyplot(fig_length)
 
     # Peptide Intensity Boxplot (combined, Fraction on x-axis)
     st.header("Peptide Intensity by Fraction")
@@ -124,6 +131,8 @@ if uploaded_file:
         download_figs["PI_BOXPLOT"] = fig_pi
     if fig_gravy is not None:
         download_figs["GRAVY_BOXPLOT"] = fig_gravy
+    if fig_length is not None:
+        download_figs["LENGTH_BOXPLOT"] = fig_length
     if fig_intensity is not None:
         download_figs["INTENSITY_BOXPLOT"] = fig_intensity
     for f in fractions:
