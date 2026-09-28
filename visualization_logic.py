@@ -1,13 +1,54 @@
 import math
 import pandas as pd 
 import numpy as np 
-import matplotlib.pyplot as plt
+import io
+import threading
+from functools import wraps
+
+import matplotlib
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.ticker import ScalarFormatter
 from scipy.signal import savgol_filter
 from mpl_toolkits.mplot3d import proj3d
 import streamlit as st
 
 from aa_properties import compute_peptide_properties
+
+# ------------------------------------------------------------------
+# Thread safety
+# Streamlit runs every rerun in its own thread, and matplotlib's math-text
+# parser (used for tick labels such as 1e6 and for "$\times 10^6$") is a shared
+# global that is not thread-safe. All figure building / rendering therefore goes
+# through one re-entrant lock. Figures are created with the object-oriented
+# Figure class instead of pyplot, so there is no shared "current figure" and
+# nothing to close afterwards (a figure is freed once it is no longer referenced).
+# ------------------------------------------------------------------
+MPL_LOCK = threading.RLock()
+
+
+def _locked(func):
+    """Run a plotting function while holding MPL_LOCK."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with MPL_LOCK:
+            return func(*args, **kwargs)
+    return wrapper
+
+
+def _new_figure(**kwargs):
+    """A standalone Figure with an Agg canvas (pyplot-free, so also usable from threads)."""
+    fig = Figure(**kwargs)
+    FigureCanvasAgg(fig)
+    return fig
+
+
+def fig_to_png(fig, dpi=150):
+    """Render a figure to PNG bytes (under the lock). Used for both display and download."""
+    with MPL_LOCK:
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+        return buf.getvalue()
 
 
 def fmt_fraction(f):
@@ -218,6 +259,7 @@ def _compute_membership_combos(peptide_sets):
     series = pd.Series(values, index=idx).sort_values(ascending=False)
     return series
 
+@_locked
 def plot_peptide_overlap(peptide_sets, top_n=25, method=None):
     """
     Visualize peptide overlap across fractions as an UpSet plot: a bar chart of
@@ -241,7 +283,7 @@ def plot_peptide_overlap(peptide_sets, top_n=25, method=None):
     combo_counts = combo_counts.iloc[:top_n]
     n_combos = len(combo_counts)
  
-    fig = plt.figure(figsize=(max(8, n_combos * 0.45), 7), constrained_layout=True)
+    fig = _new_figure(figsize=(max(8, n_combos * 0.45), 7), layout='constrained')
     gs = fig.add_gridspec(2, 1, height_ratios=[2.2, max(1.0, n * 0.35)], hspace=0.05)
     ax_bar = fig.add_subplot(gs[0])
     ax_dots = fig.add_subplot(gs[1], sharex=ax_bar)
@@ -394,6 +436,7 @@ def apply_smoothing_pipeline(binned_df, mode, window_minutes, bin_width_min):
     
     return out
 
+@_locked
 def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_unique, cumulative_intensity, bar_width,
                                smooth_mode, show_filter, x_min, x_max,
                                overlay_mode='twin_axis', unique_intensity=None, method=None):
@@ -401,7 +444,8 @@ def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_uniqu
         st.warning("No data to plot")
         return None
 
-    fig, ax = plt.subplots(figsize=(10, 5)) # Reduced slightly for better web viewing
+    fig = _new_figure(figsize=(10, 5))  # Reduced slightly for better web viewing
+    ax = fig.subplots()
     label_text = f"Profile (filter = {smooth_mode})"
     pct_unique = (n_unique / n_peptides * 100) if n_peptides > 0 else 0.0
     pep_label = (f"Peptide identifications: {n_peptides} \n"
@@ -454,7 +498,7 @@ def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_uniqu
     ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
     ax.ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
 
-    plt.tight_layout()
+    fig.tight_layout()
     
     # Return the figure object instead of saving it
     return fig
@@ -547,6 +591,7 @@ def place_zaxis_multiplier_text(ax, text, fontsize=10, pad_points=10):
     fig.text(text_fig_frac[0], text_fig_frac[1], text, fontsize=fontsize,
               ha='center', va='center', transform=fig.transFigure)
             
+@_locked
 def plot_waterfall_3d(all_binned, smooth_mode, elev=23, azim=-83, method=None):
     fractions = sorted(list(all_binned.keys()))
     if len(fractions) == 0:
@@ -562,8 +607,8 @@ def plot_waterfall_3d(all_binned, smooth_mode, elev=23, azim=-83, method=None):
     exponent = int(np.log10(max_val) // 3 * 3) if max_val > 0 else 0
     scale_factor = 10**exponent
 
-    colors = plt.cm.brg(np.linspace(0, 1, len(fractions)))
-    fig = plt.figure(figsize=(10, 7))
+    colors = matplotlib.colormaps['brg'](np.linspace(0, 1, len(fractions)))
+    fig = _new_figure(figsize=(10, 7))
     ax = fig.add_subplot(111, projection='3d')
 
     for i, fraction in enumerate(fractions):
@@ -599,13 +644,14 @@ def plot_waterfall_3d(all_binned, smooth_mode, elev=23, azim=-83, method=None):
     ax.zaxis.get_label().set_rotation(zlabel_angle)    
     
     ax.legend(loc='upper right', frameon=True, fontsize=10)
-    plt.tight_layout()
+    fig.tight_layout()
 
     # 3. Dynamic Scaling Label (e.g., x 10^6)
     place_zaxis_multiplier_text(ax, rf'$\times 10^{{{exponent}}}$', fontsize=10, pad_points=48)   
 
     return fig
 
+@_locked
 def _boxplot_grid(panels, ylabel, suptitle, color, log_scale=False, zero_line=False, max_cols=3):
     """
     One big figure with one subplot per file. Each subplot is titled with the
@@ -620,8 +666,8 @@ def _boxplot_grid(panels, ylabel, suptitle, color, log_scale=False, zero_line=Fa
     max_frac = max(len(fr) for fr, _ in panels.values())
     panel_w = max(4.0, max_frac * 0.8)
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(panel_w * ncols, 4.3 * nrows),
-                             sharey=True, squeeze=False, constrained_layout=True)
+    fig = _new_figure(figsize=(panel_w * ncols, 4.3 * nrows), layout='constrained')
+    axes = fig.subplots(nrows, ncols, sharey=True, squeeze=False)
     flat = axes.ravel()
 
     for ax, (label, (fractions, data)) in zip(flat, panels.items()):
@@ -707,6 +753,7 @@ def plot_intensity_boxplot_grid(dfs_by_method, ylabel='Intensity (a.u.)',
     return _boxplot_grid(panels, ylabel, title, color, log_scale=log_scale)
 
 
+@_locked
 def plot_stacked_fractions(all_exact, all_binned, show_filter, x_min, x_max, bar_width, method=None):
     n_fractions = len(all_exact)
     if n_fractions == 0:
@@ -714,8 +761,8 @@ def plot_stacked_fractions(all_exact, all_binned, show_filter, x_min, x_max, bar
         return None
 
     # Use constrained_layout=True for better spacing between stacked subplots
-    fig, axes = plt.subplots(n_fractions, 1, figsize=(10, 3 * n_fractions), 
-                             sharex=True, constrained_layout=True)
+    fig = _new_figure(figsize=(10, 3 * n_fractions), layout='constrained')
+    axes = fig.subplots(n_fractions, 1, sharex=True)
     
     if n_fractions == 1:
         axes = [axes]

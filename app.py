@@ -1,6 +1,3 @@
-import matplotlib 
-matplotlib.use('Agg')  
-import matplotlib.pyplot as plt
 import streamlit as st
 
 import visualization_logic as vl
@@ -125,7 +122,7 @@ st.dataframe(pd.DataFrame([{
     'Fractions': len(ds['fractions']),
     'Unique peptides': ds['df_clean']['Sequence'].nunique(),
     'Rows after cleaning': len(ds['df_clean']),
-} for label, ds in datasets.items()]), hide_index=True, use_container_width=True)
+} for label, ds in datasets.items()]), hide_index=True, width='stretch')
 
 
 # Traces are only built for files that need them (chromatogram / stacked / waterfall)
@@ -145,7 +142,14 @@ def get_traces(label):
     return _trace_cache[label]
 
 
-download_figs = {}   # file name (no extension) -> figure
+download_pngs = {}   # file name (no extension) -> PNG bytes
+
+
+def show_fig(fig, name):
+    """Render the figure once (thread-safe) and use the same PNG for display and download."""
+    png = vl.fig_to_png(fig)
+    st.image(png, width='stretch')
+    download_pngs[name] = png
 
 # ------------------------------------------------------------------
 # 5. Chromatograms (one section per selected file)
@@ -165,8 +169,7 @@ if chromo_labels:
                 bar_width, smooth_mode, show_filter, ds['x_min'], ds['x_max'],
                 unique_intensity=stats['unique_intensity'], method=label)
             if fig is not None:
-                st.pyplot(fig)
-                download_figs[f"{slug(label)}_FRACTION_{vl.fmt_fraction(fraction)}"] = fig
+                show_fig(fig, f"{slug(label)}_FRACTION_{vl.fmt_fraction(fraction)}")
 
 # ------------------------------------------------------------------
 # 6. Stacked / 3D waterfall / overlap (one row per selected file)
@@ -199,8 +202,7 @@ if combined_labels:
                     title, key = "Peptide Overlap (UpSet)", "PEPTIDE_OVERLAP"
                 st.markdown(f"**{title}**")
                 if fig is not None:
-                    st.pyplot(fig)
-                    download_figs[f"{slug(label)}_{key}"] = fig
+                    show_fig(fig, f"{slug(label)}_{key}")
 
 # ------------------------------------------------------------------
 # 7. Boxplots: always shown, one figure per property, one subplot per file
@@ -212,23 +214,20 @@ fig_pi = vl.plot_property_boxplot_grid(
     props_by_method, 'pI', ylabel='Isoelectric Point (pI)',
     title='Theoretical pI Distribution by Fraction', color='#6baed6')
 if fig_pi is not None:
-    st.pyplot(fig_pi)
-    download_figs["PI_BOXPLOT"] = fig_pi
+    show_fig(fig_pi, "PI_BOXPLOT")
 
 fig_gravy = vl.plot_property_boxplot_grid(
     props_by_method, 'GRAVY', ylabel='GRAVY Index',
     title='GRAVY Hydrophobicity Distribution by Fraction', color='#fd8d3c')
 if fig_gravy is not None:
-    st.pyplot(fig_gravy)
-    download_figs["GRAVY_BOXPLOT"] = fig_gravy
+    show_fig(fig_gravy, "GRAVY_BOXPLOT")
 
 st.header("Peptide Intensity by Fraction")
 log_scale_intensity = st.checkbox("Log scale (Intensity)", value=True)
 fig_intensity = vl.plot_intensity_boxplot_grid(
     {label: ds['df_clean'] for label, ds in datasets.items()}, log_scale=log_scale_intensity)
 if fig_intensity is not None:
-    st.pyplot(fig_intensity)
-    download_figs["INTENSITY_BOXPLOT"] = fig_intensity
+    show_fig(fig_intensity, "INTENSITY_BOXPLOT")
 
 # ------------------------------------------------------------------
 # 8. Download Center (only the plots that are currently displayed)
@@ -236,34 +235,27 @@ if fig_intensity is not None:
 st.divider()
 st.subheader("Download Center")
 
-if download_figs:
+if download_pngs:
     cols = st.columns(4)
-    for i, (name, fig) in enumerate(download_figs.items()):
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches='tight')
+    for i, (name, png) in enumerate(download_pngs.items()):
         cols[i % 4].download_button(
             label=f"Download {name}",
-            data=buf.getvalue(),
+            data=png,
             file_name=f"{name.lower()}.png",
             mime="image/png"
         )
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zf:
-        for name, fig in download_figs.items():
-            img_buf = io.BytesIO()
-            fig.savefig(img_buf, format="png", bbox_inches='tight')
-            zf.writestr(f"{name.lower()}.png", img_buf.getvalue())
-
-    for fig in download_figs.values():
-        plt.close(fig)
+        for name, png in download_pngs.items():
+            zf.writestr(f"{name.lower()}.png", png)
 
     st.download_button(
         label="📦 Download ALL Displayed Plots (ZIP)",
         data=zip_buffer.getvalue(),
         file_name="all_plots.zip",
         mime="application/zip",
-        use_container_width=True
+        width='stretch'
     )
 else:
     st.caption("No plots to download yet.")
