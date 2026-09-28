@@ -1,6 +1,6 @@
 streamlit
-pandas<2.0.0
+pandas
 numpy
-matplotlib<3.11.0
+matplotlib
 scipy
 biopython
