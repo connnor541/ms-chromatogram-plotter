@@ -1,3 +1,4 @@
+import math
 import pandas as pd 
 import numpy as np 
 import matplotlib.pyplot as plt
@@ -8,8 +9,25 @@ import streamlit as st
 
 from aa_properties import compute_peptide_properties
 
+
+def fmt_fraction(f):
+    """1.0 -> '1', 2 -> '2', 'x' -> 'x' (clean fraction labels for titles / axes / file names)."""
+    try:
+        if float(f).is_integer():
+            return str(int(f))
+    except (TypeError, ValueError):
+        pass
+    return str(f)
+
+
+def _with_method(title, method):
+    """Prefix a plot title with the fractionation method, e.g. 'RP high pH | 3D Waterfall'."""
+    return f"{method} | {title}" if method else title
+
 def load_proteomics_data(file_input):
     try:
+        if hasattr(file_input, 'seek'):
+            file_input.seek(0)
         df = pd.read_csv(file_input, sep=',', encoding='utf-8')
         st.info(f"Data loaded succesfully! Shape: {df.shape[0]} rows, {df.shape[1]} columns.")    
 
@@ -160,7 +178,6 @@ def compute_aa_properties(df_clean):
 
     props_df = pd.DataFrame(records)
     df_props = df_clean.merge(props_df, on='Sequence', how='left')
-    df_props['Length'] = df_props['Sequence'].str.len()
 
     if n_failed > 0:
         st.warning(
@@ -201,7 +218,7 @@ def _compute_membership_combos(peptide_sets):
     series = pd.Series(values, index=idx).sort_values(ascending=False)
     return series
 
-def plot_peptide_overlap(peptide_sets, top_n=25):
+def plot_peptide_overlap(peptide_sets, top_n=25, method=None):
     """
     Visualize peptide overlap across fractions as an UpSet plot: a bar chart of
     exclusive intersection sizes on top, with a dot-matrix below showing which
@@ -234,7 +251,7 @@ def plot_peptide_overlap(peptide_sets, top_n=25):
     for xi, val in zip(x, combo_counts.values):
         ax_bar.text(xi, val, f'{val}', ha='center', va='bottom', fontsize=8)
     ax_bar.set_ylabel('Peptide count', fontsize=11)
-    ax_bar.set_title("Peptide Overlap Across Fractions (UpSet plot)", fontsize=14, fontweight='bold')
+    ax_bar.set_title(_with_method("Peptide Overlap Across Fractions (UpSet plot)", method), fontsize=14, fontweight='bold')
     ax_bar.spines[['top', 'right']].set_visible(False)
     ax_bar.tick_params(axis='x', bottom=False, labelbottom=False)
  
@@ -252,7 +269,7 @@ def plot_peptide_overlap(peptide_sets, top_n=25):
                              s=60, zorder=2)
  
     ax_dots.set_yticks(range(n))
-    ax_dots.set_yticklabels([f"Fraction {f}" for f in fractions], fontsize=10)
+    ax_dots.set_yticklabels([f"Fraction {fmt_fraction(f)}" for f in fractions], fontsize=10)
     ax_dots.set_ylim(-0.5, n - 0.5)
     ax_dots.invert_yaxis()
     ax_dots.set_xlim(-0.5, n_combos - 0.5)
@@ -379,7 +396,7 @@ def apply_smoothing_pipeline(binned_df, mode, window_minutes, bin_width_min):
 
 def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_unique, cumulative_intensity, bar_width,
                                smooth_mode, show_filter, x_min, x_max,
-                               overlay_mode='twin_axis', unique_intensity=None):
+                               overlay_mode='twin_axis', unique_intensity=None, method=None):
     if len(exact_df) == 0:
         st.warning("No data to plot")
         return None
@@ -428,7 +445,8 @@ def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_uniqu
     if x_min is not None and x_max is not None:
         ax.set_xlim(x_min, x_max)
 
-    title = f'MS Chromatogram - Fraction {fraction}' if fraction is not None else 'MS Chromatogram'
+    title = f'MS Chromatogram - Fraction {fmt_fraction(fraction)}' if fraction is not None else 'MS Chromatogram'
+    title = _with_method(title, method)
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_xlabel('Retention Time (min)', fontsize=12)
     ax.grid(True, linestyle='--', alpha=0.3)
@@ -529,7 +547,7 @@ def place_zaxis_multiplier_text(ax, text, fontsize=10, pad_points=10):
     fig.text(text_fig_frac[0], text_fig_frac[1], text, fontsize=fontsize,
               ha='center', va='center', transform=fig.transFigure)
             
-def plot_waterfall_3d(all_binned, smooth_mode, elev=23, azim=-83):
+def plot_waterfall_3d(all_binned, smooth_mode, elev=23, azim=-83, method=None):
     fractions = sorted(list(all_binned.keys()))
     if len(fractions) == 0:
         st.warning("No data available for the waterfall plot.")
@@ -557,7 +575,7 @@ def plot_waterfall_3d(all_binned, smooth_mode, elev=23, azim=-83):
         # 2. Apply Dynamic Scale
         z = binned['Processed'].values / scale_factor 
         
-        ax.plot(x, depth, z, color=colors[i], linewidth=1.8, alpha=0.8, label=str(fraction))
+        ax.plot(x, depth, z, color=colors[i], linewidth=1.8, alpha=0.8, label=fmt_fraction(fraction))
 
     ax.zaxis._axinfo['juggled'] = (1, 2, 0)
     ax.set_xlabel('Retention time (min)', fontsize=12, labelpad=10)
@@ -572,6 +590,8 @@ def plot_waterfall_3d(all_binned, smooth_mode, elev=23, azim=-83):
         axis._axinfo['grid']['color'] = (0.85, 0.85, 0.85, 1)
 
     ax.view_init(elev=elev, azim=azim)
+    if method:
+        ax.set_title(_with_method('3D Waterfall', method), fontsize=14, fontweight='bold')
     ax.set_box_aspect((1.5, 2.0, 0.8))
 
     # Apply the rotation function
@@ -586,93 +606,108 @@ def plot_waterfall_3d(all_binned, smooth_mode, elev=23, azim=-83):
 
     return fig
 
-def plot_property_boxplot(df_props, property_col, ylabel, title, color='#6baed6'):
+def _boxplot_grid(panels, ylabel, suptitle, color, log_scale=False, zero_line=False, max_cols=3):
     """
-    Boxplot of a per-peptide biophysical property (e.g. 'pI' or 'GRAVY')
-    grouped by Fraction - one box per fraction. Each peptide Sequence is
-    counted once per fraction (deduplicated), since its property value is
-    identical regardless of how many retention-time rows it appears in.
-    """
-    if property_col not in df_props.columns:
-        st.warning(f"Column '{property_col}' not found - cannot plot.")
-        return None
+    One big figure with one subplot per file. Each subplot is titled with the
+    file's fractionation method and shows one box per fraction.
 
-    fractions = sorted(df_props['Fraction'].dropna().unique())
-    if len(fractions) == 0:
+    panels: {method_label: (fractions_list, [array_per_fraction])}
+    All subplots share the y-axis so the methods can be compared directly.
+    """
+    n = len(panels)
+    ncols = min(n, max_cols)
+    nrows = math.ceil(n / ncols)
+    max_frac = max(len(fr) for fr, _ in panels.values())
+    panel_w = max(4.0, max_frac * 0.8)
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(panel_w * ncols, 4.3 * nrows),
+                             sharey=True, squeeze=False, constrained_layout=True)
+    flat = axes.ravel()
+
+    for ax, (label, (fractions, data)) in zip(flat, panels.items()):
+        ax.set_title(label, fontsize=12, fontweight='bold')
+        ax.set_xlabel('Fraction', fontsize=10)
+        ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+
+        if not any(len(d) for d in data):
+            ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes, color='gray')
+            continue
+
+        bp = ax.boxplot(data, patch_artist=True)
+        # set ticks manually: the 'labels' kwarg was renamed/removed across matplotlib versions
+        ax.set_xticks(range(1, len(fractions) + 1))
+        ax.set_xticklabels([fmt_fraction(f) for f in fractions])
+        for patch in bp['boxes']:
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+        for median in bp['medians']:
+            median.set_color('black')
+        if zero_line:
+            ax.axhline(0, color='gray', linestyle=':', linewidth=1)
+
+    for ax in flat[n:]:
+        ax.set_visible(False)
+    if log_scale:
+        for ax in flat[:n]:
+            ax.set_yscale('log')
+    for r in range(nrows):
+        axes[r, 0].set_ylabel(ylabel, fontsize=10)
+
+    fig.suptitle(suptitle, fontsize=14, fontweight='bold')
+    return fig
+
+
+def plot_property_boxplot_grid(props_by_method, property_col, ylabel, title, color='#6baed6'):
+    """
+    Combined boxplot figure of a per-peptide biophysical property (e.g. 'pI' or 'GRAVY').
+    One subplot per file (titled with its fractionation method), one box per fraction.
+    Each peptide Sequence is counted once per fraction (deduplicated), since its
+    property value does not depend on how many retention-time rows it appears in.
+
+    props_by_method: {method_label: df_props}
+    """
+    panels = {}
+    for label, df_props in props_by_method.items():
+        if property_col not in df_props.columns:
+            st.warning(f"{label}: column '{property_col}' not found - skipped in boxplot.")
+            continue
+        fractions = sorted(df_props['Fraction'].dropna().unique())
+        dedup = df_props.drop_duplicates(subset=['Fraction', 'Sequence'])
+        data = [dedup.loc[dedup['Fraction'] == f, property_col].dropna().values for f in fractions]
+        panels[label] = (fractions, data)
+
+    if not panels:
         st.warning(f"No data available for {property_col} boxplot.")
         return None
-
-    dedup = df_props.drop_duplicates(subset=['Fraction', 'Sequence'])
-    data = [dedup.loc[dedup['Fraction'] == f, property_col].dropna().values for f in fractions]
-
-    fig, ax = plt.subplots(figsize=(max(6, len(fractions) * 1.0), 5), constrained_layout=True)
-    # matplotlib renamed the 'labels' kwarg to 'tick_labels' in 3.9+ and later
-    # dropped 'labels' entirely, so set the ticks manually instead of relying
-    # on either kwarg - this works across all matplotlib versions.
-    bp = ax.boxplot(data, patch_artist=True)
-    ax.set_xticks(range(1, len(fractions) + 1))
-    ax.set_xticklabels([str(f) for f in fractions])
-
-    for patch in bp['boxes']:
-        patch.set_facecolor(color)
-        patch.set_alpha(0.7)
-    for median in bp['medians']:
-        median.set_color('black')
-
-    ax.set_title(title, fontsize=13, fontweight='bold')
-    ax.set_xlabel('Fraction', fontsize=11)
-    ax.set_ylabel(ylabel, fontsize=11)
-    ax.grid(True, linestyle='--', alpha=0.3, axis='y')
-
-    if property_col == 'GRAVY':
-        ax.axhline(0, color='gray', linestyle=':', linewidth=1)
-
-    return fig
+    return _boxplot_grid(panels, ylabel, title, color, zero_line=(property_col == 'GRAVY'))
 
 
-def plot_intensity_boxplot(df_clean, ylabel='Intensity (a.u.)', title='Peptide Intensity Distribution by Fraction',
-                            color='#74c476', log_scale=True):
+def plot_intensity_boxplot_grid(dfs_by_method, ylabel='Intensity (a.u.)',
+                                title='Peptide Intensity Distribution by Fraction',
+                                color='#74c476', log_scale=True):
     """
-    Boxplot of peptide Intensity values grouped by Fraction - one box per
-    fraction, combined into a single figure with Fraction on the x-axis.
-    Uses df_clean directly (each row is already one peptide/RT/fraction
-    observation after the collapse steps in clean_data), so no further
-    deduplication is needed.
-    """
-    if 'Intensity' not in df_clean.columns:
-        st.warning("Column 'Intensity' not found - cannot plot.")
-        return None
+    Combined boxplot figure of peptide Intensity by Fraction: one subplot per file
+    (titled with its fractionation method). Uses df_clean directly (each row is already
+    one peptide/RT/fraction observation after the collapse steps in clean_data).
 
-    fractions = sorted(df_clean['Fraction'].dropna().unique())
-    if len(fractions) == 0:
+    dfs_by_method: {method_label: df_clean}
+    """
+    panels = {}
+    for label, df_clean in dfs_by_method.items():
+        if 'Intensity' not in df_clean.columns:
+            st.warning(f"{label}: column 'Intensity' not found - skipped in boxplot.")
+            continue
+        fractions = sorted(df_clean['Fraction'].dropna().unique())
+        data = [df_clean.loc[df_clean['Fraction'] == f, 'Intensity'].dropna().values for f in fractions]
+        panels[label] = (fractions, data)
+
+    if not panels:
         st.warning("No data available for the intensity boxplot.")
         return None
-
-    data = [df_clean.loc[df_clean['Fraction'] == f, 'Intensity'].dropna().values for f in fractions]
-
-    fig, ax = plt.subplots(figsize=(max(6, len(fractions) * 1.0), 5), constrained_layout=True)
-    bp = ax.boxplot(data, patch_artist=True)
-    ax.set_xticks(range(1, len(fractions) + 1))
-    ax.set_xticklabels([str(f) for f in fractions])
-
-    for patch in bp['boxes']:
-        patch.set_facecolor(color)
-        patch.set_alpha(0.7)
-    for median in bp['medians']:
-        median.set_color('black')
-
-    if log_scale:
-        ax.set_yscale('log')
-
-    ax.set_title(title, fontsize=13, fontweight='bold')
-    ax.set_xlabel('Fraction', fontsize=11)
-    ax.set_ylabel(ylabel, fontsize=11)
-    ax.grid(True, linestyle='--', alpha=0.3, axis='y')
-
-    return fig
+    return _boxplot_grid(panels, ylabel, title, color, log_scale=log_scale)
 
 
-def plot_stacked_fractions(all_exact, all_binned, show_filter, x_min, x_max, bar_width):
+def plot_stacked_fractions(all_exact, all_binned, show_filter, x_min, x_max, bar_width, method=None):
     n_fractions = len(all_exact)
     if n_fractions == 0:
         st.warning("No data available for stacked plotting.")
@@ -702,13 +737,13 @@ def plot_stacked_fractions(all_exact, all_binned, show_filter, x_min, x_max, bar
         if x_min is not None and x_max is not None:
             ax.set_xlim(x_min, x_max)
 
-        ax.set_ylabel(f'Frac {fraction}', fontsize=11, rotation=0, labelpad=30)
+        ax.set_ylabel(f'Frac {fmt_fraction(fraction)}', fontsize=11, rotation=0, labelpad=30)
         ax.grid(True, linestyle='--', alpha=0.3)
 
         ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
         ax.ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
 
     axes[-1].set_xlabel('Retention Time (min)', fontsize=12)
-    fig.suptitle('MS Chromatograms - All Fractions (Stacked)', fontsize=14, fontweight='bold')
+    fig.suptitle(_with_method('MS Chromatograms - All Fractions (Stacked)', method), fontsize=14, fontweight='bold')
 
     return fig
