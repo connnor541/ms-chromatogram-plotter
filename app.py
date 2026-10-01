@@ -21,9 +21,21 @@ def slug(label):
 # 1. Sidebar: files + fractionation methods
 # ------------------------------------------------------------------
 st.sidebar.header("Data & Filter Settings")
-uploaded_files = st.sidebar.file_uploader(
-    "Upload Proteomics CSV file(s)", type=['csv'], accept_multiple_files=True
-)
+input_type = st.sidebar.radio("Input type", ['Progenesis', 'PLGS'], index=0, horizontal=True)
+is_plgs = input_type == 'PLGS'
+
+if is_plgs:
+    uploaded_files = st.sidebar.file_uploader(
+        "Upload PLGS Excel file(s)", type=['xlsx'], accept_multiple_files=True,
+        key="uploader_plgs"
+    )
+    st.sidebar.caption("One Excel file per fractionation method. Each sheet is one fraction, "
+                       "numbered by sheet order (first sheet = fraction 1).")
+else:
+    uploaded_files = st.sidebar.file_uploader(
+        "Upload Proteomics CSV file(s)", type=['csv'], accept_multiple_files=True,
+        key="uploader_progenesis"
+    )
 
 active = []  # list of (uploaded_file, method)
 if uploaded_files:
@@ -54,7 +66,10 @@ window = st.sidebar.slider("Smoothing Window (min)", 0.1, 5.0, 1.0, 0.1)
 bar_width = st.sidebar.slider("Bar Width", 0.01, 0.2, 0.05, 0.01)
 show_filter = st.sidebar.checkbox("Show Filter Overlay", value=False)
 combine_mode = st.sidebar.radio("Aggregation Method", ['max', 'sum'])
-filter_quant = st.sidebar.checkbox("Enforce 'Use in quantitation' Filter", value=True)
+if is_plgs:
+    filter_quant = False   # PLGS files have no 'Use in quantitation' column
+else:
+    filter_quant = st.sidebar.checkbox("Enforce 'Use in quantitation' Filter", value=True)
 
 # ------------------------------------------------------------------
 # 3. Sidebar: which files to show per plot type (all OFF by default)
@@ -74,7 +89,8 @@ azim = st.sidebar.slider("Azimuth", -180, 180, -83)
 # 4. Load + clean every file (needed for the combined boxplots)
 # ------------------------------------------------------------------
 if not active:
-    st.info("Upload one or more proteomics CSV files in the sidebar. "
+    kind = "PLGS Excel (.xlsx)" if is_plgs else "proteomics CSV"
+    st.info(f"Upload one or more {kind} files in the sidebar. "
             f"The file name must contain the fractionation method ({', '.join(md.ALLOWED_METHODS)}).")
     st.stop()
 
@@ -82,18 +98,20 @@ datasets = {}
 for (f, method), label in zip(active, labels):
     with st.expander(f"Processing log - {label}  ({f.name})", expanded=False):
         try:
-            df = vl.load_proteomics_data(f)
-            df_clean, intensity_col, invalid_stats = vl.clean_data(
-                df, filter_quant=filter_quant, combine_mode=combine_mode)
+            if is_plgs:
+                df = vl.load_plgs_data(f)
+                df_clean, intensity_col, invalid_stats = vl.clean_plgs_data(df)
+            else:
+                df = vl.load_proteomics_data(f)
+                df_clean, intensity_col, invalid_stats = vl.clean_data(
+                    df, filter_quant=filter_quant, combine_mode=combine_mode)
         except Exception as e:
             st.error(f"'{f.name}' could not be processed and is skipped: {e}")
             continue
 
         if invalid_stats["TOTAL"] > 0:
-            st.warning(
-                f"**{invalid_stats['TOTAL']} invalid rows removed:** "
-                f"({invalid_stats['RT']} RT, {invalid_stats['Intensity']} Intensity, "
-                f"{invalid_stats['Accession']} Accession)")
+            detail = ", ".join(f"{n} {k}" for k, n in invalid_stats.items() if k != "TOTAL")
+            st.warning(f"**{invalid_stats['TOTAL']} invalid rows removed:** ({detail})")
         else:
             st.success("Data clean! No invalid rows detected.")
 
@@ -167,7 +185,8 @@ if chromo_labels:
                 all_exact[fraction], all_binned[fraction], fraction,
                 stats['n_peptides'], stats['n_unique'], stats['cumulative_intensity'],
                 bar_width, smooth_mode, show_filter, ds['x_min'], ds['x_max'],
-                unique_intensity=stats['unique_intensity'], method=label)
+                unique_intensity=stats['unique_intensity'], method=label,
+                show_peaks=is_plgs)
             if fig is not None:
                 show_fig(fig, f"{slug(label)}_FRACTION_{vl.fmt_fraction(fraction)}")
 

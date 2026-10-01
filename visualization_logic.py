@@ -1,4 +1,5 @@
 import math
+import re
 import pandas as pd 
 import numpy as np 
 import io
@@ -168,6 +169,109 @@ def clean_data(df, filter_quant=True, combine_mode='max'):
     )
     
     return df_clean, intensity_col, invalid_stats
+
+# ------------------------------------------------------------------
+# PLGS input (Excel workbook, one sheet per fraction)
+# ------------------------------------------------------------------
+def strip_flanking_residues(seq):
+    """Remove the bracketed neighbouring residues PLGS adds to a sequence.
+    '(K)HLVDEPQNLIK(Q)' -> 'HLVDEPQNLIK',  '(K)LVVSTQTALA(-)' -> 'LVVSTQTALA'."""
+    if pd.isna(seq):
+        return ''
+    s = str(seq).strip()
+    s = re.sub(r'^\([^)]*\)', '', s)
+    s = re.sub(r'\([^)]*\)$', '', s)
+    return s.strip()
+
+
+def _find_col(df, predicate):
+    """First column whose (stripped) name satisfies predicate, else None."""
+    return next((c for c in df.columns if predicate(c)), None)
+
+
+def load_plgs_data(file_input):
+    """Read every sheet of a PLGS workbook. The fraction number is the position of the
+    sheet in the workbook (first sheet = fraction 1)."""
+    try:
+        if hasattr(file_input, 'seek'):
+            file_input.seek(0)
+        sheets = pd.read_excel(file_input, sheet_name=None)  # dict, keeps the sheet order
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
+        raise
+
+    frames = []
+    for position, (sheet_name, sheet) in enumerate(sheets.items(), start=1):
+        if sheet.empty:
+            st.warning(f"Sheet '{sheet_name}' (fraction {position}) is empty and is skipped.")
+            continue
+        sheet = sheet.copy()
+        sheet['Fraction'] = position
+        sheet['Sheet'] = sheet_name
+        frames.append(sheet)
+
+    if not frames:
+        st.error("No data found in any sheet of this workbook.")
+        raise ValueError("No data found in any sheet.")
+
+    df = pd.concat(frames, ignore_index=True)
+    st.info(f"Data loaded succesfully! {len(frames)} sheet(s) = fractions, {df.shape[0]} rows.")
+    return df
+
+
+def clean_plgs_data(df):
+    """
+    PLGS counterpart of clean_data(). Returns (df_clean, intensity_col, invalid_stats) with
+    the same columns as clean_data(): Fraction, Retention_time, Sequence, Intensity.
+
+    - Fraction was set from the sheet position by load_plgs_data().
+    - Retention time comes from 'Retention Time (min)' (a plain elution time, not adjusted).
+    - Intensity comes from the 'Intensity' column.
+    - The Sequence loses its bracketed flanking residues, e.g. '(K)PEPTIDEK(Q)' -> 'PEPTIDEK'.
+    - There is no collapsing: a modified form of a peptide is its own row (own retention
+      time and intensity) and therefore its own bar, but it shares the stripped Sequence
+      with the unmodified form, so it is not counted as a different peptide.
+    """
+    df = df.copy()
+    df.columns = df.columns.astype(str).str.strip()
+
+    # Case-insensitive lookups. (The Progenesis lookup 'RT' in name would wrongly hit
+    # 'Products RMS RT Error (min)' in a PLGS file.)
+    rt_col = _find_col(df, lambda c: c.lower().startswith('retention time'))
+    int_col = _find_col(df, lambda c: c.lower() == 'intensity')
+    seq_col = _find_col(df, lambda c: c.lower() == 'sequence')
+    for col, name in ((rt_col, 'Retention Time'), (int_col, 'Intensity'), (seq_col, 'Sequence')):
+        if col is None:
+            st.error(f"CRITICAL ERROR: No '{name}' column found in the PLGS data!")
+            raise ValueError(f"No '{name}' column found.")
+
+    out = pd.DataFrame({
+        'Fraction': df['Fraction'],
+        'Retention_time': pd.to_numeric(df[rt_col], errors='coerce'),
+        'Sequence': df[seq_col].map(strip_flanking_residues),
+        'Intensity': pd.to_numeric(df[int_col], errors='coerce'),
+    })
+
+    bad_rt = out['Retention_time'].isna()
+    bad_int = out['Intensity'].isna()
+    bad_seq = out['Sequence'] == ''
+    invalid = bad_rt | bad_int | bad_seq
+    invalid_stats = {
+        "RT": int(bad_rt.sum()),
+        "Intensity": int(bad_int.sum()),
+        "Sequence": int(bad_seq.sum()),
+        "TOTAL": int(invalid.sum()),
+    }
+    df_clean = out[~invalid].reset_index(drop=True)
+
+    n_raw_seq = df[seq_col].nunique()
+    st.write(f"**[PLGS - SEQUENCES]** bracketed residues removed: {n_raw_seq} distinct sequences "
+             f"-> {df_clean['Sequence'].nunique()}.")
+    st.write(f"**[PLGS - NO COLLAPSE]** {len(out)} rows -> {len(df_clean)} rows "
+             f"(each row is one peak; modified forms stay separate bars).")
+
+    return df_clean, int_col, invalid_stats
+
 
 def compute_fraction_peptide_stats(df_clean):
     seq_fraction_counts = df_clean.groupby('Sequence')['Fraction'].nunique()
@@ -439,7 +543,8 @@ def apply_smoothing_pipeline(binned_df, mode, window_minutes, bin_width_min):
 @_locked
 def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_unique, cumulative_intensity, bar_width,
                                smooth_mode, show_filter, x_min, x_max,
-                               overlay_mode='twin_axis', unique_intensity=None, method=None):
+                               overlay_mode='twin_axis', unique_intensity=None, method=None,
+                               show_peaks=False):
     if len(exact_df) == 0:
         st.warning("No data to plot")
         return None
@@ -452,6 +557,9 @@ def plot_chromatogram_with_ma(exact_df, binned_df, fraction, n_peptides, n_uniqu
                  f"Unique peptides: {n_unique} ({pct_unique:.0f}%)\n"
                  f"Cumulative intensity: {cumulative_intensity:.2e}"
             )
+    if show_peaks:
+        # PLGS: first line of the legend is the number of peaks (= bars drawn)
+        pep_label = f"Peaks: {len(exact_df)}\n" + pep_label
     if unique_intensity is not None:
         pct_unique_intensity = (unique_intensity / cumulative_intensity * 100) if cumulative_intensity > 0 else 0.0
         pep_label += f"\nUnique peptide intensity: {unique_intensity:.2e} ({pct_unique_intensity:.0f}%)"
