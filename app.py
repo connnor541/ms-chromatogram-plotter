@@ -2,6 +2,8 @@ import streamlit as st
 
 import visualization_logic as vl
 import method_detection as md
+import orthogonality as orth
+import numpy as np
 import pandas as pd
 import io
 import re
@@ -247,6 +249,70 @@ fig_intensity = vl.plot_intensity_boxplot_grid(
     {label: ds['df_clean'] for label, ds in datasets.items()}, log_scale=log_scale_intensity)
 if fig_intensity is not None:
     show_fig(fig_intensity, "INTENSITY_BOXPLOT")
+
+# ------------------------------------------------------------------
+# 7b. Orthogonality: entropy + mutual information (Biba et al. 2025)
+# ------------------------------------------------------------------
+st.header("Fractionation Orthogonality (Entropy & Mutual Information)")
+st.caption("Each peptide is assigned to one fraction per method; entropy and mutual information are then "
+           "computed from the resulting fraction-vs-fraction peptide counts.")
+
+max_observed = int(max(max(ds['fractions']) for ds in datasets.values()))
+with st.expander("Orthogonality settings", expanded=True):
+    c1, c2, c3, c4 = st.columns(4)
+    assign_method = c1.selectbox("Fraction assignment", [orth.ASSIGN_MEAN, orth.ASSIGN_APEX])
+    weight_mode = c2.selectbox("Weights for the mean", [orth.WEIGHT_LINEAR, orth.WEIGHT_LOG2],
+                               disabled=assign_method != orth.ASSIGN_MEAN)
+    ortho_agg = c3.selectbox("Rows of one peptide in a fraction", ['sum', 'max'])
+    scope_label = c4.selectbox("Peptides used", ["Shared by all files (as in paper)", "Shared per pair"])
+    c5, c6 = st.columns(2)
+    n_fractions = int(c5.number_input("Number of fractions", min_value=max_observed, max_value=50,
+                                      value=max(6, max_observed)))
+    normalize_tic = c6.checkbox("Normalise every fraction to its total intensity", value=True)
+
+assignments = {}
+for label, ds in datasets.items():
+    profile = orth.peptide_fraction_profiles(ds['df_clean'], n_fractions=n_fractions,
+                                             aggregate=ortho_agg, normalize_tic=normalize_tic)
+    assignments[label] = orth.assign_fractions(profile, method=assign_method, weight=weight_mode)
+
+scope = 'all' if scope_label.startswith("Shared by all") else 'pair'
+singles_df, pairs_df, matrices = orth.compute_orthogonality(assignments, n_fractions, scope=scope)
+
+if len(datasets) < 2:
+    st.info("Load at least two files to see pairwise (joint entropy / mutual information) results.")
+elif scope == 'all':
+    n_common = int(singles_df['n_peptides'].iloc[0])
+    st.write(f"**{n_common} peptides** are shared by all {len(datasets)} files and used for every calculation.")
+    if n_common < 30:
+        st.warning("Few shared peptides: entropy estimates from so few peptides are noisy, and the joint "
+                   "entropy cannot exceed log2(number of peptides).")
+
+st.markdown("**1D entropy per method** (maximum = log2(fractions) = "
+            f"{np.log2(n_fractions):.2f} bits)")
+st.dataframe(singles_df.rename(columns={'label': 'Method', 'n_peptides': 'Peptides', 'entropy': 'Entropy (bits)'})
+             .round(3), hide_index=True, width='stretch')
+
+if not pairs_df.empty:
+    st.markdown("**Method pairs** (sorted by joint entropy; Cond. = H(M1|M2) + H(M2|M1), "
+                "orthogonality score = joint entropy - MI)")
+    st.dataframe(pairs_df.drop(columns=['A', 'B']).rename(columns={
+        'pair': 'Pair', 'n_peptides': 'Peptides', 'joint': 'Joint entropy', 'MI': 'Mutual information',
+        'cond': 'Cond. entropies', 'H_A': 'H(M1)', 'H_B': 'H(M2)'}).round(3),
+        hide_index=True, width='stretch')
+
+fig_entropy = orth.plot_pair_entropy(pairs_df, singles_df, n_fractions)
+if fig_entropy is not None:
+    show_fig(fig_entropy, "ENTROPY_MI")
+fig_heat = orth.plot_contingency_grid(matrices, n_fractions)
+if fig_heat is not None:
+    show_fig(fig_heat, "ORTHOGONALITY_HEATMAPS")
+
+with st.expander("Fraction assigned to each peptide"):
+    assign_df = orth.assignment_table(assignments)
+    st.dataframe(assign_df, width='stretch')
+    st.download_button("Download assignments (CSV)", assign_df.to_csv().encode('utf-8'),
+                       file_name="peptide_fraction_assignments.csv", mime="text/csv")
 
 # ------------------------------------------------------------------
 # 8. Download Center (only the plots that are currently displayed)
