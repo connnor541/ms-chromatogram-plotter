@@ -1,4 +1,4 @@
-ms-chromatogram-plotter.streamlit.app
+https://ms-chromatogram-plotter.streamlit.app/
 
 # Proteomics Visualizer
 
